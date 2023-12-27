@@ -12,7 +12,7 @@ class OntologyAdapter():
 
     ONTOLOGIES = {
         
-        'pc': 'file:///home/wendecoder/Downloads/pc_compound2component.owl',
+        'pcco': 'file:///home/wendecoder/Downloads/pc_compound2descriptor.owl',
     }
 
     HAS_ATTRIBUTE = rdflib.term.URIRef("http://semanticscience.org/resource/SIO_000008")
@@ -45,28 +45,22 @@ class OntologyAdapter():
         self.type = type
         self.dry_run = dry_run
         if type == 'node':
-            self.label = 'ontology_term'
+            self.label = 'ontology_term COMPOUND'
         elif type == 'edge':
             self.label = 'ontology_relationship'
         else:
             raise ValueError('Invalid type. Allowed values: node, edge')
         
-    def getValue(self, url):
-        print(url)
-        url = url
+    def getValue(self, id):
+        print(id)
+        url = url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{id}/JSON"
         try:
             response = requests.get(url)
             if response.status_code == 200:
-                soup = BeautifulSoup(response.text, 'html.parser')
-                value_element = soup.find('span', {'class': 'value'})
+                data = response.json()
+                return data
                 
-                if value_element:
-                    return value_element.text.strip()
-                    # canonical_smiles = value_element.text.strip()
-                    # print("Canonical SMILES:", canonical_smiles)
-                else:
-                    return None
-                    print("No element with class 'value' found.")
+                
             else:
                 print(f"Error: {response.status_code}")
         except requests.RequestException as e:
@@ -100,7 +94,7 @@ class OntologyAdapter():
             # nodes = list(self.graph.subject_objects())
             i = 0 # dry run is set to true just output the first 1000 nodes
             for node in nodes:
-                if i > 10:
+                if i > 100 and self.dry_run:
                     break
                 # print(node)
                 # avoiding blank nodes and other arbitrary node types
@@ -112,22 +106,23 @@ class OntologyAdapter():
                 # term_id = str(node).split('/')[-1]
                 print(node)
                 term_id = OntologyAdapter.to_key(node)
+                data = self.getValue(term_id[3:])
                 print("term id", term_id)
-                attribute = str(','.join(self.get_all_property_values_from_node(node, 'attributes')))
-                attributesList = attribute.split(',')
+                # attribute = str(','.join(self.get_all_property_values_from_node(node, 'attributes')))
+                # attributesList = attribute.split(',')
                 # print(attributesList)
                 props = {
                     # 'uri': str(node),44444444444444
                     # 'attribute' : ' '.join(self.get_all_property_values_from_node(node, 'attributes')),
-                    'Canonical_SMILES' : self.getValue(attributesList[0]),
-                    'Compound_Identifier' : self.getValue(attributesList[1]),
+                    # 'Canonical_SMILES' : self.getValue(attributesList[0]),
+                    # 'Compound_Identifier' : self.getValue(attributesList[1]),
                     # 'Covalent_Unit_Count' : self.getValue(attributesList[2]),
                     # 'Defined_Atom_Stereo_Count' : self.getValue(attributesList[3]),
                     # 'Defined_Bond_Stereo_Count' : self.getValue(attributesList[4]),
-                    'Exact_Mass' : self.getValue(attributesList[5]),
-                    'Hydrogen_Bond_Acceptor_Count' : self.getValue(attributesList[6]),
-                    'Hydrogen_Bond_Donor_Count' : self.getValue(attributesList[7]),
-                    'IUPAC_InChI' : self.getValue(attributesList[8]),
+                    # 'Exact_Mass' : self.getValue(attributesList[5]),
+                    # 'Hydrogen_Bond_Acceptor_Count' : self.getValue(attributesList[6]),
+                    # 'Hydrogen_Bond_Donor_Count' : self.getValue(attributesList[7]),
+                    # 'IUPAC_InChI' : self.getValue(attributesList[8]),
                     # 'Isomeric_SMILES' : self.getValue(attributesList[9]),
                     # 'Isotope_Atom_Count' : self.getValue(attributesList[10]),
                     # 'Molecular_Formula' : self.getValue(attributesList[11]),
@@ -137,10 +132,42 @@ class OntologyAdapter():
                     # self.get_all_property_values_from_node(node, 'exact_synonyms'),
                     # 'subontology': nodes_in_go_namespaces.get(node, None),
                     'source': ontology.upper(),
-                    'source_url': OntologyAdapter.ONTOLOGIES[ontology],
+                    'source_url': f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{term_id[3:]}/JSON",
 
                 }
-                print(props)
+                if 'PC_Compounds' in data:
+                    compound_info = data['PC_Compounds'][0]
+                    excluded_properties = ['SubStructure_Keys_Fingerprint', 'Allowed_IUPAC_Name', 'CAS-like_Style_IUPAC_Name', 'Markup_IUPAC_Name', 'Systematic_IUPAC_Name', 'Traditional_IUPAC_Name', 'Canonicalized_Compound']
+                    for property in compound_info.get('props', []):
+                        prop_name = f"{property['urn']['name']}_{property['urn']['label']}" if 'urn' in property and 'name' in property['urn'] else property['urn']['label']
+                        prop_name = prop_name.replace(' ', '_')
+                        if prop_name in excluded_properties:
+                            continue
+                        if prop_name == 'MonoIsotopic_Weight':
+                            prop_name = 'Mono_Isotopic_Weight'
+                        if prop_name == 'Polar_Surface_Area_Topological':
+                            prop_name = 'TPSA'
+                        value_key = next((key for key in ['sval', 'ival', 'binary', 'fval'] if key in property['value']), None)
+                        prop_value = property['value'][value_key]
+                        props[prop_name] = prop_value
+                    for key, count in compound_info.get('count', []).items():
+                        if key == 'heavy_atom':
+                            props['Non-hydrogen_Atom_Count'] = count
+                        if key == 'atom_chiral_def':
+                            props['Defined_Atom_Stereo_Count'] = count
+                        if key == 'atom_chiral_undef':
+                            props['Undefined_Atom_Stereo_Count'] = count
+                        if key == 'bond_chiral_def':
+                            props['Defined_Bond_Stereo_Count'] = count
+                        if key == 'bond_chiral_undef':
+                            props['Undefined_Bond_Stereo_Count'] = count
+                        if key == 'covalent_unit':
+                            props['Covalent_Unit_Count'] = count
+                        if key == 'isotope_atom':
+                            props['Isotope_Atom_Count'] = count
+                        
+                    props['Total_Formal_Charge'] = compound_info.get('charge', '')
+                        # print(props)
                 i += 1
                 yield term_id, self.label, props
 
